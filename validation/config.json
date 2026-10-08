@@ -1,3 +1,11 @@
 {
-  "macros": ["example.mac"]
+  "macros": [
+    "Aluminium/00deg_emstandardOpt0.mac",
+    "Beryllium/00deg_emstandardOpt0.mac",
+    "Carbon/00deg_emstandardOpt0.mac",
+    "Molybdenum/00deg_emstandardOpt0.mac",
+    "Tantalum/00deg_emstandardOpt0.mac",
+    "Titanium/00deg_emstandardOpt0.mac",
+    "Uranium/00deg_emstandardOpt0.mac"
+  ]
 }

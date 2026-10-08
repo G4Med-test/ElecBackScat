@@ -1,75 +1,103 @@
-"""Turns the output of one validation run into plots for the Geant Validation Portal.
+#!/usr/bin/env python
 
-The CI imports this file and calls two functions, once for every macro listed in
-validation/config.json:
-
-1. metadata(commands)  BEFORE the simulation: describe the run from its macro.
-2. parse(job)          AFTER the simulation: read the output files, return plots.
-
-You only have to edit the lines marked TODO. Example with macro/example.mac:
-
-    commands = [("/myapp/phys/addPhysics", "FTFP_BERT"), ("/run/initialize", ""),
-                ("/gun/particle", "proton"), ("/gun/energy", "100 MeV"), ...]
-
-    metadata(commands) -> {"TEST": "MyTest", "PHYSICS_LIST": "FTFP_BERT",
-                           "PARTICLE": "proton", "ENERGY": 100.0}
-
-    job = that dict + {"path": "<directory of the run>", "VERSION": "11.3.2"}
-    parse(job) -> one plot per `yield`
-
-The run directory contains the files your application wrote with relative names
-(here result.txt) and the captured standard output (test_stdout.txt).
-
-Helpers from ci-workflows/validation/geantval.py:
-- one_command(commands, "/cmd"): value of a command that appears exactly once
-  (error if missing or repeated, so the metadata always matches the macro);
-- energy_mev("100 MeV"): energy in MeV;
-- getJSON(job, ...): builds one plot in the portal format (see parse below).
-"""
-from pathlib import Path
+# ElecBackScat portal parser: metadata() reads the macro, parse() the per-run
+# lines appended to res.dat by UserRunAction::EndOfRunAction. One macro holds a
+# fixed energy scan (one /run/beamOn per energy) at one material/angle/physics
+# list; each line is one point of the scan.
+import math
+import os
 
 from geantval import energy_mev, getJSON, one_command
 
+MODELS = {"emstandard_opt0", "emstandard_opt1", "emstandard_opt2", "emstandard_opt3",
+          "emstandard_opt4", "standardSS", "standardSSM", "standardWVI", "standardGS",
+          "empenelope", "emlivermore", "emlowenergy"}
 
-def metadata(commands):
-    """Describe one run, reading every setting from its macro.
 
-    The returned dict must contain "TEST" (the test name shown on the portal);
-    add whatever parse() needs. Raise an error if the macro is not suitable.
-    """
-    return {
-        "TEST": "MyTest",  # TODO: your test name
-        "PHYSICS_LIST": one_command(commands, "/myapp/phys/addPhysics"),  # TODO: your command
-        "PARTICLE": one_command(commands, "/gun/particle"),
-        "ENERGY": energy_mev(one_command(commands, "/gun/energy")),
-    }
+def extract_runs(filename, expected_points):
+    rows = []
+    with open(filename) as myfile:
+        for line in myfile:
+            fields = line.split()
+            if len(fields) != 7:
+                raise ValueError("Expected 7 columns in res.dat: " + line)
+            _material, energy, angle, en_alb, en_alb_err, num_alb, num_alb_err = fields
+            rows.append((float(energy), float(angle), float(en_alb), float(en_alb_err),
+                        float(num_alb), float(num_alb_err)))
+    if len(rows) != expected_points:
+        raise ValueError("res.dat has %d runs, expected %d" % (len(rows), expected_points))
+    return rows
 
 
 def parse(job):
-    """Read the output of the run in job["path"] and yield one plot per `yield`."""
-    # TODO: read your output file. This example expects two columns, x and y,
-    # one point per line; lines starting with # are comments.
-    x, y = [], []
-    for line in (Path(job["path"]) / "result.txt").read_text().splitlines():
-        if line.strip() and not line.startswith("#"):
-            x_value, y_value = line.split()
-            x.append(float(x_value))
-            y.append(float(y_value))
+    filepath = os.path.join(job["path"], "res.dat")
+    rows = extract_runs(filepath, job["EXPECTED_POINTS"])
+    energies = [r[0] for r in rows]
+    if any(not math.isclose(e, expected, rel_tol=1e-6) for e, expected in zip(energies, job["ENERGIES"])):
+        raise ValueError("res.dat energies do not match the macro")
+    if any(not math.isclose(r[1], job["ANGLE"], abs_tol=1e-6) for r in rows):
+        raise ValueError("res.dat angle does not match the macro")
 
-    # "chart" is a set of points (x, y). For a histogram use "histogram" with
-    # binEdgeLow, binEdgeHigh and binContent instead of xValues and yValues.
-    # Optional uncertainties: yStatErrorsPlus/Minus, ySysErrorsPlus/Minus.
-    yield getJSON(
-        job, "chart",
-        mctool_name="GEANT4",
-        mctool_model=job["PHYSICS_LIST"],
-        observableName="TODO observable",  # e.g. "attenuation coefficient"
-        targetName="TODO target",          # e.g. "water"
-        beamParticle=job["PARTICLE"],
-        beamEnergies=[job["ENERGY"]],      # MeV
-        title="TODO title",
-        xAxisName="TODO x, unit",
-        yAxisName="TODO y, unit",
-        xValues=x,
-        yValues=y,
-    )
+    params = [{"names": "angle", "values": job["ANGLE"]}]
+
+    yield getJSON(job, "chart",
+                 mctool_name="GEANT4",
+                 mctool_model=job["MODEL"],
+                 observableName="Backscattered energy coefficient",
+                 targetName=job["MATERIAL"],
+                 beamParticle="e-",
+                 beamEnergies=energies,
+                 parameters=params,
+                 secondaryParticle="None",
+                 title="Backscattered energy coefficient",
+                 xAxisName="E, MeV",
+                 yAxisName="Backscattered energy coefficient",
+                 xValues=energies,
+                 yValues=[r[2] for r in rows],
+                 yStatErrorsPlus=[r[3] for r in rows],
+                 yStatErrorsMinus=[r[3] for r in rows])
+
+    yield getJSON(job, "chart",
+                 mctool_name="GEANT4",
+                 mctool_model=job["MODEL"],
+                 observableName="Backscattered electron number coefficient",
+                 targetName=job["MATERIAL"],
+                 beamParticle="e-",
+                 beamEnergies=energies,
+                 parameters=params,
+                 secondaryParticle="None",
+                 title="Backscattered electron number coefficient",
+                 xAxisName="E, MeV",
+                 yAxisName="Backscattered electron number coefficient",
+                 xValues=energies,
+                 yValues=[r[4] for r in rows],
+                 yStatErrorsPlus=[r[5] for r in rows],
+                 yStatErrorsMinus=[r[5] for r in rows])
+
+
+def metadata(commands):
+    model = one_command(commands, "/testem/phys/addPhysics")
+    if model not in MODELS:
+        raise ValueError("Unsupported physics list for this validation: " + model)
+
+    angle_value, angle_unit = one_command(commands, "/beam/angle").split()
+    if angle_unit != "deg":
+        raise ValueError("Expected /beam/angle in deg, got " + angle_unit)
+
+    energies = []
+    energy = None
+    for command, value in commands:
+        if command == "/beam/energy":
+            energy = energy_mev(value)
+        if command == "/run/beamOn":
+            if energy is None or int(value) <= 0:
+                raise ValueError("Each beamOn needs an explicit energy and positive event count")
+            energies.append(energy)
+    if not energies:
+        raise ValueError("No energy scan in macro")
+
+    return {"TEST": "ElecBackScat",
+            "MODEL": model,
+            "MATERIAL": one_command(commands, "/detector/material").removeprefix("G4_"),
+            "ANGLE": float(angle_value),
+            "EXPECTED_POINTS": len(energies), "ENERGIES": energies}

@@ -1,6 +1,40 @@
-# Smoke test run on every push: one event, only generic Geant4 commands.
-# Add your application's commands as needed, keeping it fast.
-/control/verbose 2
-/run/verbose 2
+####################################
+# e- BEAM (one-event smoke test, run on every push)
+####################################
+#
+/control/verbose 1
+/tracking/verbose 0
+/run/verbose 0
+/event/verbose 0
+#
+###########
+# PHYSICS #
+###########
+#
+/testem/phys/addPhysics standardGS
+#
+######################
+# RUN INITIALIZATION #
+######################
+#
 /run/initialize
+#
+########################
+# DETECTOR DESCRIPTION #
+########################
+#
+/detector/material           G4_Al
+/detector/length             0.264 cm
+/detector/radius             2.54 cm
+#
+/beam/angle                  0.0 deg
+#
+####################
+# BEAM DESCRIPTION #
+####################
+#
+/beam/energy                 1.033 MeV
+/beam/sigma                  0.0
+#
+/run/printProgress 1
 /run/beamOn 1
